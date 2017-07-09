@@ -32,6 +32,8 @@ func main() {
 	flag.StringVar(&httpsAddr, "https", ":8443", "HTTPS listen address")
 	var pidFile string
 	flag.StringVar(&pidFile, "pidfile", "graceserver.pid", "pid file")
+	var sleepDuration time.Duration
+	flag.DurationVar(&sleepDuration, "sleep", time.Second, "sleep duration in http handler")
 	var fdEnvName string
 	flag.StringVar(&fdEnvName, "fdenv", "LISTEN_FDS", "environment variable for passing file discriptor count to worker")
 	flag.Parse()
@@ -93,7 +95,12 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
+		if sleepDuration > 0 {
+			time.Sleep(sleepDuration)
+			fmt.Fprintf(w, "from pid %d after sleeping %s!!.\n", os.Getpid(), sleepDuration)
+		} else {
+			fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
+		}
 	})
 	var tlsConfig *tls.Config
 	if httpsLn != nil {
