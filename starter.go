@@ -53,8 +53,7 @@ func SetEnvName(name string) Option {
 //
 // If the master process receives a SIGHUP, it starts a new worker and stop the old worker
 // by sending a SIGTERM signal.
-// If the master process receives a SIGTERM or a SIGKILL, it sends the same signal to the
-// worker and exists.
+// If the master process receives a SIGTERM, it sends the SIGTER to the worker and exists.
 func (s *Starter) RunMaster(listeners ...net.Listener) error {
 	s.listeners = listeners
 	wd, err := os.Getwd()
@@ -69,7 +68,9 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 	}
 
 	sigC := make(chan os.Signal, 1)
-	signal.Notify(sigC, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGKILL)
+	// NOTE: The signals SIGKILL and SIGSTOP may not be caught by a program.
+	// https://golang.org/pkg/os/signal/#hdr-Types_of_signals
+	signal.Notify(sigC, syscall.SIGHUP, syscall.SIGTERM)
 	for {
 		sig := <-sigC
 		switch sig {
@@ -91,10 +92,10 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 
 			childPid = newChildPid
 
-		case syscall.SIGTERM, syscall.SIGKILL:
-			err := syscall.Kill(childPid, sig.(syscall.Signal))
+		case syscall.SIGTERM:
+			err := syscall.Kill(childPid, syscall.SIGTERM)
 			if err != nil {
-				return fmt.Errorf("error in RunMaster after sending signal to worker pid=%d after receiving signal; %v", childPid, err)
+				return fmt.Errorf("error in RunMaster after sending SIGTERM to worker pid=%d after receiving SIGTERM; %v", childPid, err)
 			}
 			return nil
 		}
