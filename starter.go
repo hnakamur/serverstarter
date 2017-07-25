@@ -70,7 +70,7 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 	sigC := make(chan os.Signal, 1)
 	// NOTE: The signals SIGKILL and SIGSTOP may not be caught by a program.
 	// https://golang.org/pkg/os/signal/#hdr-Types_of_signals
-	signal.Notify(sigC, syscall.SIGHUP, syscall.SIGTERM)
+	signal.Notify(sigC, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
 	for {
 		sig := <-sigC
 		switch sig {
@@ -92,10 +92,10 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 
 			childPid = newChildPid
 
-		case syscall.SIGTERM:
+		case syscall.SIGINT, syscall.SIGTERM:
 			err := syscall.Kill(childPid, syscall.SIGTERM)
 			if err != nil {
-				return fmt.Errorf("error in RunMaster after sending SIGTERM to worker pid=%d after receiving SIGTERM; %v", childPid, err)
+				return fmt.Errorf("error in RunMaster after sending SIGTERM to worker pid=%d after receiving %v; %v", childPid, sig, err)
 			}
 			return nil
 		}
