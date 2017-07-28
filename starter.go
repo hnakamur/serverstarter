@@ -51,6 +51,7 @@ func SetEnvName(name string) Option {
 }
 
 // SetGracefulShutdownSignalToChild sets the signal to send to child for graceful shutdown.
+// If no SetGracefulShutdownSignalToChild is called, the default value is syscall.SIGTERM.
 func SetGracefulShutdownSignalToChild(sig syscall.Signal) Option {
 	return func(s *Starter) {
 		s.gracefulShutdownSignalToChild = sig
@@ -61,8 +62,9 @@ func SetGracefulShutdownSignalToChild(sig syscall.Signal) Option {
 // on signals.
 //
 // If the master process receives a SIGHUP, it starts a new worker and stop the old worker
-// by sending a SIGTERM signal.
-// If the master process receives a SIGTERM, it sends the SIGTER to the worker and exists.
+// by sending a signal set by SetGracefulShutdownSignalToChild.
+// If the master process receives a SIGINT or a SIGTERM, it sends the SIGTERM to the worker
+// and exists.
 func (s *Starter) RunMaster(listeners ...net.Listener) error {
 	s.listeners = listeners
 	wd, err := os.Getwd()
