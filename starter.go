@@ -21,9 +21,10 @@ const (
 
 // Starter is a server starter.
 type Starter struct {
-	envListenFDs     string
-	workingDirectory string
-	listeners        []net.Listener
+	envListenFDs                  string
+	workingDirectory              string
+	listeners                     []net.Listener
+	gracefulShutdownSignalToChild syscall.Signal
 }
 
 // Option is the type for configuring a Starter.
@@ -32,7 +33,8 @@ type Option func(s *Starter)
 // New returns a new Starter.
 func New(options ...Option) *Starter {
 	s := &Starter{
-		envListenFDs: defaultEnvListenFDs,
+		envListenFDs:                  defaultEnvListenFDs,
+		gracefulShutdownSignalToChild: syscall.SIGTERM,
 	}
 	for _, o := range options {
 		o(s)
@@ -45,6 +47,13 @@ func New(options ...Option) *Starter {
 func SetEnvName(name string) Option {
 	return func(s *Starter) {
 		s.envListenFDs = name
+	}
+}
+
+// SetGracefulShutdownSignalToChild sets the signal to send to child for graceful shutdown.
+func SetGracefulShutdownSignalToChild(sig syscall.Signal) Option {
+	return func(s *Starter) {
+		s.gracefulShutdownSignalToChild = sig
 	}
 }
 
@@ -80,9 +89,9 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 				return fmt.Errorf("error in RunMaster after starting new worker; %v", err)
 			}
 
-			err = syscall.Kill(childPID, syscall.SIGTERM)
+			err = syscall.Kill(childPID, s.gracefulShutdownSignalToChild)
 			if err != nil {
-				return fmt.Errorf("error in RunMaster after sending SIGTERM to worker pid=%d after receiving SIGHUP; %v", childPID, err)
+				return fmt.Errorf("error in RunMaster after sending signal %q to worker pid=%d after receiving SIGHUP; %v", s.gracefulShutdownSignalToChild, childPID, err)
 			}
 
 			_, err = syscall.Wait4(childPID, nil, 0, nil)
