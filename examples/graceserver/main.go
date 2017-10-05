@@ -19,9 +19,11 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/hnakamur/contextify"
 	"github.com/hnakamur/serverstarter"
 )
 
@@ -94,6 +96,19 @@ func main() {
 		i++
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		sigC := make(chan os.Signal, 1)
+		signal.Notify(sigC, syscall.SIGTERM)
+		for {
+			if <-sigC == syscall.SIGTERM {
+				log.Printf("worker pid=%d got SIGTERM!!!!", pid)
+				cancel()
+				return
+			}
+		}
+	}()
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if sleepDuration > 0 {
 			time.Sleep(sleepDuration)
@@ -117,23 +132,39 @@ func main() {
 	srv := &http.Server{
 		TLSConfig: tlsConfig,
 	}
-	if httpLn != nil {
-		go func() { srv.Serve(httpLn) }()
-	}
-	if httpsLn != nil {
-		go func() { srv.Serve(httpsLn) }()
+	run := contextify.Contextify(func() error {
+		var wg sync.WaitGroup
+		var httpErr, httpsErr error
+		if httpLn != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				httpErr = srv.Serve(httpLn)
+			}()
+		}
+		if httpsLn != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				httpsErr = srv.Serve(httpsLn)
+			}()
+		}
+		wg.Wait()
+		log.Printf("worker pid=%d exiting run func", pid)
+		if httpErr != nil {
+			return httpErr
+		}
+		return httpsErr
+	}, func() error {
+		err := srv.Shutdown(context.Background())
+		log.Printf("worker pid=%d finish waiting shutdown.", pid)
+		return err
+	}, nil)
+	err = run(ctx)
+	if err != nil {
+		log.Printf("got error, %v", err)
 	}
 
-	sigC := make(chan os.Signal, 1)
-	signal.Notify(sigC, syscall.SIGTERM)
-	for {
-		if <-sigC == syscall.SIGTERM {
-			log.Printf("worker pid=%d got SIGTERM!!!!", pid)
-			srv.Shutdown(context.Background())
-			log.Printf("worker pid=%d finish waiting shutdown.", pid)
-			return
-		}
-	}
 }
 
 func generateSelfSignedCertificate() (tls.Certificate, error) {
