@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
 
+	"github.com/hnakamur/contextify"
 	"github.com/hnakamur/serverstarter"
 )
 
@@ -36,18 +36,29 @@ func Example() {
 	}
 	l := listeners[0]
 
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+
+		s := <-c
+		log.Printf("received signal, %s", s)
+		cancel()
+		log.Printf("cancelled context")
+	}()
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
 	})
-	srv := &http.Server{}
-	go func() { srv.Serve(l) }()
-
-	sigC := make(chan os.Signal, 1)
-	signal.Notify(sigC, syscall.SIGTERM)
-	for {
-		if <-sigC == syscall.SIGTERM {
-			srv.Shutdown(context.Background())
-			return
-		}
+	srv := http.Server{}
+	run := contextify.Contextify(func() error {
+		return srv.Serve(l)
+	}, func() error {
+		return srv.Shutdown(context.Background())
+	}, nil)
+	err := run(ctx)
+	if err != nil {
+		log.Printf("got error, %v", err)
 	}
+	log.Print("exiting")
 }
