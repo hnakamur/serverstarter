@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 
-	"github.com/hnakamur/contextify"
 	"github.com/hnakamur/serverstarter"
 )
 
@@ -24,6 +24,7 @@ func Example() {
 		if err != nil {
 			log.Fatalf("failed to listen %s; %v", *addr, err)
 		}
+		log.Printf("master pid=%d start RunMaster", os.Getpid())
 		if err = starter.RunMaster(l); err != nil {
 			log.Fatalf("failed to run master; %v", err)
 		}
@@ -36,29 +37,33 @@ func Example() {
 	}
 	l := listeners[0]
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-
-		s := <-c
-		log.Printf("received signal, %s", s)
-		cancel()
-		log.Printf("cancelled context")
-	}()
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
 	})
+
 	srv := http.Server{}
-	run := contextify.Contextify(func() error {
-		return srv.Serve(l)
-	}, func() error {
-		return srv.Shutdown(context.Background())
-	}, nil)
-	err := run(ctx)
-	if err != nil {
-		log.Printf("got error, %v", err)
+
+	idleConnsClosed := make(chan struct{})
+	go func() {
+		sigterm := make(chan os.Signal, 1)
+		signal.Notify(sigterm, syscall.SIGTERM)
+		<-sigterm
+
+		log.Printf("received sigterm")
+		// We received an interrupt signal, shut down.
+		if err := srv.Shutdown(context.Background()); err != nil {
+			// Error from closing listeners, or context timeout:
+			log.Printf("http(s) server Shutdown: %v", err)
+		}
+		close(idleConnsClosed)
+		log.Printf("closed idleConnsClosed")
+	}()
+
+	log.Printf("worker pid=%d http server start Serve", os.Getpid())
+	if err := srv.Serve(l); err != http.ErrServerClosed {
+		// Error starting or closing listener:
+		log.Printf("http server Serve: %v", err)
 	}
-	log.Print("exiting")
+	<-idleConnsClosed
+	log.Printf("exiting pid=%d", os.Getpid())
 }
