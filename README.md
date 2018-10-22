@@ -21,11 +21,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/hnakamur/contextify"
 	"github.com/hnakamur/serverstarter"
 )
 
-func Example() {
+func main() {
 	addr := flag.String("addr", ":8080", "server listen address")
 	flag.Parse()
 
@@ -47,35 +46,31 @@ func Example() {
 	}
 	l := listeners[0]
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, syscall.SIGTERM)
-
-		s := <-c
-		log.Printf("received signal, %s", s)
-		cancel()
-		log.Printf("cancelled context")
-	}()
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
 	})
+
 	srv := http.Server{}
-	run := contextify.Contextify(func() error {
-		err := srv.Serve(l)
-		if err != nil && err != http.ErrServerClosed {
-			return err
+
+	idleConnsClosed := make(chan struct{})
+	go func() {
+		sigterm := make(chan os.Signal, 1)
+		signal.Notify(sigterm, syscall.SIGTERM)
+		<-sigterm
+
+		// We received an interrupt signal, shut down.
+		if err := srv.Shutdown(context.Background()); err != nil {
+			// Error from closing listeners, or context timeout:
+			log.Printf("http(s) server Shutdown: %v", err)
 		}
-		return nil
-	}, func() error {
-		return srv.Shutdown(context.Background())
-	}, nil)
-	err := run(ctx)
-	if err != nil && err != context.Canceled {
-		log.Printf("got error, %v", err)
+		close(idleConnsClosed)
+	}()
+
+	if err := srv.Serve(l); err != http.ErrServerClosed {
+		// Error starting or closing listener:
+		log.Printf("http server Serve: %v", err)
 	}
-	log.Print("exiting")
+	<-idleConnsClosed
 }
 ```
 

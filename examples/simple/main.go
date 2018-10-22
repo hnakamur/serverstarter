@@ -1,4 +1,4 @@
-package serverstarter_test
+package main
 
 import (
 	"context"
@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hnakamur/serverstarter"
 )
 
-func Example() {
+func main() {
 	addr := flag.String("addr", ":8080", "server listen address")
+	sleepBeforeServe := flag.Duration("sleep-before-serve", time.Second, "sleep duration before serve")
 	flag.Parse()
 
 	starter := serverstarter.New()
@@ -58,6 +60,10 @@ func Example() {
 		close(idleConnsClosed)
 		log.Printf("closed idleConnsClosed")
 	}()
+
+	if *sleepBeforeServe > 0 {
+		time.Sleep(*sleepBeforeServe)
+	}
 
 	log.Printf("worker pid=%d http server start Serve", os.Getpid())
 	if err := srv.Serve(l); err != http.ErrServerClosed {
