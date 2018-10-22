@@ -23,7 +23,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hnakamur/contextify"
 	"github.com/hnakamur/serverstarter"
 )
 
@@ -96,19 +95,6 @@ func main() {
 		i++
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		sigC := make(chan os.Signal, 1)
-		signal.Notify(sigC, syscall.SIGTERM)
-		for {
-			if <-sigC == syscall.SIGTERM {
-				log.Printf("worker pid=%d got SIGTERM!!!!", pid)
-				cancel()
-				return
-			}
-		}
-	}()
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if sleepDuration > 0 {
 			time.Sleep(sleepDuration)
@@ -117,6 +103,7 @@ func main() {
 			fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
 		}
 	})
+
 	var tlsConfig *tls.Config
 	if httpsLn != nil {
 		cert, err := generateSelfSignedCertificate()
@@ -132,39 +119,47 @@ func main() {
 	srv := &http.Server{
 		TLSConfig: tlsConfig,
 	}
-	run := contextify.Contextify(func() error {
-		var wg sync.WaitGroup
-		var httpErr, httpsErr error
-		if httpLn != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				httpErr = srv.Serve(httpLn)
-			}()
-		}
-		if httpsLn != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				httpsErr = srv.Serve(httpsLn)
-			}()
-		}
-		wg.Wait()
-		log.Printf("worker pid=%d exiting run func", pid)
-		if httpErr != nil {
-			return httpErr
-		}
-		return httpsErr
-	}, func() error {
-		err := srv.Shutdown(context.Background())
-		log.Printf("worker pid=%d finish waiting shutdown.", pid)
-		return err
-	}, nil)
-	err = run(ctx)
-	if err != nil {
-		log.Printf("got error, %v", err)
-	}
 
+	idleConnsClosed := make(chan struct{})
+	go func() {
+		sigterm := make(chan os.Signal, 1)
+		signal.Notify(sigterm, syscall.SIGTERM)
+		<-sigterm
+
+		// We received an interrupt signal, shut down.
+		if err := srv.Shutdown(context.Background()); err != nil {
+			// Error from closing listeners, or context timeout:
+			log.Printf("http(s) server Shutdown: %v", err)
+		}
+		close(idleConnsClosed)
+	}()
+
+	var wg sync.WaitGroup
+	if httpLn != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Printf("worker pid=%d http server start Serve", pid)
+			if err := srv.Serve(httpLn); err != http.ErrServerClosed {
+				// Error starting or closing listener:
+				log.Printf("http server Serve: %v", err)
+			}
+		}()
+	}
+	if httpsLn != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			log.Printf("worker pid=%d https server start Serve", pid)
+			if err := srv.Serve(httpsLn); err != http.ErrServerClosed {
+				// Error starting or closing listener:
+				log.Printf("https server Serve: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	<-idleConnsClosed
+	log.Printf("worker pid=%d exiting run func", pid)
 }
 
 func generateSelfSignedCertificate() (tls.Certificate, error) {
