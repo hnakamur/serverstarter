@@ -20,13 +20,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/hnakamur/contextify"
 	"github.com/hnakamur/serverstarter"
 )
 
-func Example() {
+func main() {
 	addr := flag.String("addr", ":8080", "server listen address")
+	sleepBeforeServe := flag.Duration("sleep-before-serve", time.Second, "sleep duration before serve")
 	flag.Parse()
 
 	starter := serverstarter.New()
@@ -35,6 +36,7 @@ func Example() {
 		if err != nil {
 			log.Fatalf("failed to listen %s; %v", *addr, err)
 		}
+		log.Printf("master pid=%d start RunMaster", os.Getpid())
 		if err = starter.RunMaster(l); err != nil {
 			log.Fatalf("failed to run master; %v", err)
 		}
@@ -47,35 +49,39 @@ func Example() {
 	}
 	l := listeners[0]
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, syscall.SIGTERM)
-
-		s := <-c
-		log.Printf("received signal, %s", s)
-		cancel()
-		log.Printf("cancelled context")
-	}()
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
 	})
+
 	srv := http.Server{}
-	run := contextify.Contextify(func() error {
-		err := srv.Serve(l)
-		if err != nil && err != http.ErrServerClosed {
-			return err
+
+	idleConnsClosed := make(chan struct{})
+	go func() {
+		sigterm := make(chan os.Signal, 1)
+		signal.Notify(sigterm, syscall.SIGTERM)
+		<-sigterm
+
+		log.Printf("received sigterm")
+		// We received an interrupt signal, shut down.
+		if err := srv.Shutdown(context.Background()); err != nil {
+			// Error from closing listeners, or context timeout:
+			log.Printf("http(s) server Shutdown: %v", err)
 		}
-		return nil
-	}, func() error {
-		return srv.Shutdown(context.Background())
-	}, nil)
-	err := run(ctx)
-	if err != nil && err != context.Canceled {
-		log.Printf("got error, %v", err)
+		close(idleConnsClosed)
+		log.Printf("closed idleConnsClosed")
+	}()
+
+	if *sleepBeforeServe > 0 {
+		time.Sleep(*sleepBeforeServe)
 	}
-	log.Print("exiting")
+
+	log.Printf("worker pid=%d http server start Serve", os.Getpid())
+	if err := srv.Serve(l); err != http.ErrServerClosed {
+		// Error starting or closing listener:
+		log.Printf("http server Serve: %v", err)
+	}
+	<-idleConnsClosed
+	log.Printf("exiting pid=%d", os.Getpid())
 }
 ```
 
