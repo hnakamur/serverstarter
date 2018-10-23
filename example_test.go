@@ -59,6 +59,9 @@ func Example() {
 		log.Printf("closed idleConnsClosed")
 	}()
 
+	if err := starter.SendReady(); err != nil {
+		log.Printf("failed to send ready: %v", err)
+	}
 	log.Printf("worker pid=%d http server start Serve", os.Getpid())
 	if err := srv.Serve(l); err != http.ErrServerClosed {
 		// Error starting or closing listener:

@@ -17,7 +17,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8080", "server listen address")
-	sleepBeforeServe := flag.Duration("sleep-before-serve", time.Second, "sleep duration before serve")
+	sleepBeforeServe := flag.Duration("sleep-before-serve", 0, "sleep duration before serve")
 	flag.Parse()
 
 	starter := serverstarter.New()
@@ -65,6 +65,9 @@ func main() {
 		time.Sleep(*sleepBeforeServe)
 	}
 
+	if err := starter.SendReady(); err != nil {
+		log.Printf("failed to send ready: %v", err)
+	}
 	log.Printf("worker pid=%d http server start Serve", os.Getpid())
 	if err := srv.Serve(l); err != http.ErrServerClosed {
 		// Error starting or closing listener:
