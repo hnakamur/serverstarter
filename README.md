@@ -58,7 +58,7 @@ func main() {
 		signal.Notify(sigterm, syscall.SIGTERM)
 		<-sigterm
 
-		// We received an interrupt signal, shut down.
+		srv.SetKeepAlivesEnabled(false)
 		if err := srv.Shutdown(context.Background()); err != nil {
 			// Error from closing listeners, or context timeout:
 			log.Printf("http(s) server Shutdown: %v", err)

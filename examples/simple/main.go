@@ -17,7 +17,8 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8080", "server listen address")
-	sleepBeforeServe := flag.Duration("sleep-before-serve", 0, "sleep duration before serve")
+	startDelay := flag.Duration("start-delay", 0, "delay duration before start accepting requests")
+	handleDelay := flag.Duration("handle-delay", 0, "delay duration for handling each request")
 	flag.Parse()
 
 	starter := serverstarter.New()
@@ -40,7 +41,10 @@ func main() {
 	l := listeners[0]
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
+		if *handleDelay > 0 {
+			time.Sleep(*handleDelay)
+		}
+		fmt.Fprintf(w, "response from pid %d.\n", os.Getpid())
 	})
 
 	srv := http.Server{}
@@ -50,9 +54,9 @@ func main() {
 		sigterm := make(chan os.Signal, 1)
 		signal.Notify(sigterm, syscall.SIGTERM)
 		<-sigterm
-
 		log.Printf("received sigterm")
-		// We received an interrupt signal, shut down.
+
+		srv.SetKeepAlivesEnabled(false)
 		if err := srv.Shutdown(context.Background()); err != nil {
 			// Error from closing listeners, or context timeout:
 			log.Printf("http(s) server Shutdown: %v", err)
@@ -61,8 +65,8 @@ func main() {
 		log.Printf("closed idleConnsClosed")
 	}()
 
-	if *sleepBeforeServe > 0 {
-		time.Sleep(*sleepBeforeServe)
+	if *startDelay > 0 {
+		time.Sleep(*startDelay)
 	}
 
 	if err := starter.SendReady(); err != nil {
