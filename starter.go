@@ -12,6 +12,7 @@ import (
 const (
 	stdFdCount          = 3 // stdin, stdout, stderr
 	defaultEnvListenFDs = "LISTEN_FDS"
+	readyByte           = 'r'
 )
 
 // Starter is a server starter.
@@ -20,6 +21,7 @@ type Starter struct {
 	workingDirectory              string
 	listeners                     []net.Listener
 	gracefulShutdownSignalToChild syscall.Signal
+	readyPipeR                    *os.File
 }
 
 // Option is the type for configuring a Starter.
@@ -74,7 +76,7 @@ func (s *Starter) Listeners() ([]net.Listener, error) {
 	}
 	listeners := make([]net.Listener, count)
 	for i := 0; i < count; i++ {
-		fd := uintptr(i + stdFdCount)
+		fd := uintptr(stdFdCount + 1 + i)
 		file := os.NewFile(fd, "listener")
 		l, err := net.FileListener(file)
 		if err != nil {
@@ -83,4 +85,33 @@ func (s *Starter) Listeners() ([]net.Listener, error) {
 		listeners[i] = l
 	}
 	return listeners, nil
+}
+
+// SendReady sends ready notification from child to parent.
+func (s *Starter) SendReady() error {
+	fd := uintptr(stdFdCount)
+	readyPipeW := os.NewFile(fd, "readyPipeW")
+
+	defer readyPipeW.Close()
+	_, err := readyPipeW.Write([]byte{readyByte})
+	if err != nil {
+		return fmt.Errorf("failed to send ready to parent; %v", err)
+	}
+	return nil
+}
+
+// waitReady received ready notification from child to parent.
+func (s *Starter) waitReady() error {
+	var b [1]byte
+	n, err := s.readyPipeR.Read(b[:])
+	if err != nil {
+		return fmt.Errorf("read error in WaitNewChildReady; %v", err)
+	}
+
+	if n != 1 || b[0] != readyByte {
+		return fmt.Errorf("protocol error in WaitNewChildReady; %v", err)
+	}
+
+	s.readyPipeR.Close()
+	return nil
 }

@@ -66,6 +66,9 @@ func main() {
 		close(idleConnsClosed)
 	}()
 
+	if err := starter.SendReady(); err != nil {
+		log.Printf("failed to send ready: %v", err)
+	}
 	if err := srv.Serve(l); err != http.ErrServerClosed {
 		// Error starting or closing listener:
 		log.Printf("http server Serve: %v", err)

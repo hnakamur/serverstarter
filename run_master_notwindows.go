@@ -46,6 +46,11 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 				return fmt.Errorf("error in RunMaster after starting new worker; %v", err)
 			}
 
+			err = s.waitReady()
+			if err != nil {
+				return fmt.Errorf("error in RunMaster after waiting ready; %v", err)
+			}
+
 			childPID := childCmd.Process.Pid
 			err = syscall.Kill(childPID, s.gracefulShutdownSignalToChild)
 			if err != nil {
@@ -73,19 +78,29 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 func (s *Starter) startProcess() (cmd *exec.Cmd, err error) {
 	// This code is based on
 	// https://github.com/facebookgo/grace/blob/4afe952a37a495ae4ac0c1d4ce5f66e91058d149/gracenet/net.go#L201-L248
+	// https://github.com/cloudflare/tableflip/blob/78281f93d0754df1263259949d2468c5d0376dc6/child.go#L20-L76
+
+	// These pipes are used for communication between parent and child
+	// readyW is passed to the child, readyR stays with the parent
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("pipe failed in startProcess; %v", err)
+	}
+	s.readyPipeR = readyR
 
 	type filer interface {
 		File() (*os.File, error)
 	}
 
-	files := make([]*os.File, len(s.listeners))
+	files := make([]*os.File, 1+len(s.listeners))
+	files[0] = readyW
 	for i, l := range s.listeners {
 		f, err := l.(filer).File()
 		if err != nil {
 			return nil, fmt.Errorf("error in startProcess after getting file from listener; %v", err)
 		}
-		files[i] = f
-		defer files[i].Close()
+		files[1+i] = f
+		defer files[1+i].Close()
 	}
 
 	// Use the original binary location. This works with symlinks such that if
