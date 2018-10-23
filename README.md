@@ -101,36 +101,21 @@ In another terminal, run the following command.
 
 ```
 cd examples/graceserver
-while true; do kill -HUP $(cat graceserver.pid); sleep 1; done
+watch -n 2 "kill -HUP $(cat graceserver.pid)"
 ```
 
-### Run the benchmark clients
+### Load test using github.com/tsenart/vegeta
 
 In another terminal, run the following command.
 
 ```
-$ cd examples/h2bench
-$ go build -race
-$ ./h2bench -c 10 -d 1m http://localhost:8080
-2017/07/08 09:19:16 starting benchmark: concurrency: 10, time: 1m0s, GOMAXPROCS: 2
-2017/07/08 09:20:16 done benchmark: score 121007, elapsed 1m0.006958656s = 2016.549459 / sec
+$ go get -u github.com/tsenart/vegeta
+$ printf "GET http://127.0.0.1:9090/\nGET https://127.0.0.1:9443/\n" | vegeta attack -duration=10s -rate=100 -insecure | vegeta report
 ```
-
-Just after running the above command, without waiting the result,
-run the following command in another terminal.
-
-```
-$ cd examples/h2bench
-$ ./h2bench -c 10 -d 1m https://localhost:8443
-2017/07/08 09:19:17 starting benchmark: concurrency: 10, time: 1m0s, GOMAXPROCS: 2
-2017/07/08 09:20:17 done benchmark: score 34820, elapsed 1m0.00850312s = 580.251101 / sec
-```
-
-There is no error in the above output, the graceserver was serving all requests successfully during graceful restarts.
 
 ## Credits
 
-* Some code of this package is based on [facebookgo/grace: Graceful restart & zero downtime deploy for Go servers.](https://github.com/facebookgo/grace/)
-* `examles/graceserver/main.go` and `examples/h2bench/main.go` is based on [Go1.8のGraceful Shutdownとgo-gracedownの対応 - Shogo's Blog](https://shogo82148.github.io/blog/2017/01/21/golang-1-dot-8-graceful-shutdown/).
+* Some code of this package is based on [facebookgo/grace: Graceful restart & zero downtime deploy for Go servers.](https://github.com/facebookgo/grace/) and [cloudflare/tableflip: Graceful process restarts in Go](https://github.com/cloudflare/tableflip)
+* `examles/graceserver/main.go` and is based on [Go1.8のGraceful Shutdownとgo-gracedownの対応 - Shogo's Blog](https://shogo82148.github.io/blog/2017/01/21/golang-1-dot-8-graceful-shutdown/).
 
 Thanks!
