@@ -30,9 +30,10 @@ func main() {
 	httpAddr := flag.String("http", ":8080", "HTTP listen address")
 	httpsAddr := flag.String("https", ":8443", "HTTPS listen address")
 	pidFile := flag.String("pidfile", "graceserver.pid", "pid file")
-	sleepDuration := flag.Duration("sleep", time.Second, "sleep duration in http handler")
+	handleDelay := flag.Duration("handle-delay", 0, "delay duration for handling each request")
 	fdEnvName := flag.String("fdenv", "LISTEN_FDS", "environment variable for passing file discriptor count to worker")
-	sleepBeforeServe := flag.Duration("sleep-before-serve", 0, "sleep duration before serve")
+	startDelay := flag.Duration("start-delay", 0, "delay duration before start accepting requests")
+	shutdownTimeout := flag.Duration("shutdown-timeout", 5*time.Second, "shutdown timeout")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -92,9 +93,9 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if *sleepDuration > 0 {
-			time.Sleep(*sleepDuration)
-			fmt.Fprintf(w, "from pid %d after sleeping %s!!.\n", os.Getpid(), *sleepDuration)
+		if *handleDelay > 0 {
+			time.Sleep(*handleDelay)
+			fmt.Fprintf(w, "from pid %d after %s delay.\n", os.Getpid(), *handleDelay)
 		} else {
 			fmt.Fprintf(w, "from pid %d.\n", os.Getpid())
 		}
@@ -121,17 +122,22 @@ func main() {
 		sigterm := make(chan os.Signal, 1)
 		signal.Notify(sigterm, syscall.SIGTERM)
 		<-sigterm
+		log.Printf("received sigterm")
 
-		// We received an interrupt signal, shut down.
-		if err := srv.Shutdown(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(),
+			*shutdownTimeout)
+		defer cancel()
+		srv.SetKeepAlivesEnabled(false)
+		if err := srv.Shutdown(ctx); err != nil {
 			// Error from closing listeners, or context timeout:
-			log.Printf("http(s) server Shutdown: %v", err)
+			log.Printf("cannot gracefully shut down the server: %v", err)
 		}
 		close(idleConnsClosed)
+		log.Printf("closed idleConnsClosed")
 	}()
 
-	if *sleepBeforeServe > 0 {
-		time.Sleep(*sleepBeforeServe)
+	if *startDelay > 0 {
+		time.Sleep(*startDelay)
 	}
 
 	var wgStart, wgStop sync.WaitGroup
