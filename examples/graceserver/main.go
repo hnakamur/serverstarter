@@ -33,6 +33,7 @@ func main() {
 	handleDelay := flag.Duration("handle-delay", 0, "delay duration for handling each request")
 	fdEnvName := flag.String("fdenv", "LISTEN_FDS", "environment variable for passing file discriptor count to worker")
 	startDelay := flag.Duration("start-delay", 0, "delay duration before start accepting requests")
+	shutdownTimeout := flag.Duration("shutdown-timeout", 5*time.Second, "shutdown timeout")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -121,13 +122,18 @@ func main() {
 		sigterm := make(chan os.Signal, 1)
 		signal.Notify(sigterm, syscall.SIGTERM)
 		<-sigterm
+		log.Printf("received sigterm")
 
+		ctx, cancel := context.WithTimeout(context.Background(),
+			*shutdownTimeout)
+		defer cancel()
 		srv.SetKeepAlivesEnabled(false)
-		if err := srv.Shutdown(context.Background()); err != nil {
+		if err := srv.Shutdown(ctx); err != nil {
 			// Error from closing listeners, or context timeout:
-			log.Printf("http(s) server Shutdown: %v", err)
+			log.Printf("cannot gracefully shut down the server: %v", err)
 		}
 		close(idleConnsClosed)
+		log.Printf("closed idleConnsClosed")
 	}()
 
 	if *startDelay > 0 {

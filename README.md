@@ -57,13 +57,18 @@ func main() {
 		sigterm := make(chan os.Signal, 1)
 		signal.Notify(sigterm, syscall.SIGTERM)
 		<-sigterm
+		log.Printf("received sigterm")
 
+		ctx, cancel := context.WithTimeout(context.Background(),
+			*shutdownTimeout)
+		defer cancel()
 		srv.SetKeepAlivesEnabled(false)
-		if err := srv.Shutdown(context.Background()); err != nil {
+		if err := srv.Shutdown(ctx); err != nil {
 			// Error from closing listeners, or context timeout:
-			log.Printf("http(s) server Shutdown: %v", err)
+			log.Printf("cannot gracefully shut down the server: %v", err)
 		}
 		close(idleConnsClosed)
+		log.Printf("closed idleConnsClosed")
 	}()
 
 	if err := starter.SendReady(); err != nil {
