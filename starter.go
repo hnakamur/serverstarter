@@ -105,11 +105,11 @@ func (s *Starter) waitReady() error {
 	var b [1]byte
 	n, err := s.readyPipeR.Read(b[:])
 	if err != nil {
-		return fmt.Errorf("read error in WaitNewChildReady; %v", err)
+		return fmt.Errorf("read error in receiving ready notification; %v", err)
 	}
 
 	if n != 1 || b[0] != readyByte {
-		return fmt.Errorf("protocol error in WaitNewChildReady; %v", err)
+		return fmt.Errorf("protocol error in receiving ready notification; %v", err)
 	}
 
 	s.readyPipeR.Close()
