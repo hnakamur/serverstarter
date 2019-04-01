@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // RunMaster starts a worker process and run the loop for starting and stopping the worker
@@ -57,9 +58,33 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 				return fmt.Errorf("error in RunMaster after sending signal %q to worker pid=%d after receiving SIGHUP; %v", s.gracefulShutdownSignalToChild, childPID, err)
 			}
 
-			err = childCmd.Wait()
-			if err != nil {
-				return fmt.Errorf("error in RunMaster after waiting worker pid=%d; %v", childPID, err)
+			doneC := make(chan error)
+			go func() {
+				doneC <- childCmd.Wait()
+			}()
+
+			timer := time.NewTimer(s.childShutdownWaitTimeout)
+			defer timer.Stop()
+
+			select {
+			case err := <-doneC:
+				if err != nil {
+					// NOTE: We do NOT return the error here, since we want to
+					// move forward and make the mater process continue running.
+					fmt.Fprintf(os.Stderr, "error in waiting for child to graceful shutdown: %+v", err)
+				}
+			case <-timer.C:
+				err = syscall.Kill(childPID, syscall.SIGKILL)
+				if err != nil {
+					return fmt.Errorf("error in RunMaster after sending signal SIGKILL to worker pid=%d after receiving SIGHUP: %+v", childPID, err)
+				}
+
+				err = <-doneC
+				if err != nil {
+					// NOTE: We do NOT return the error here, since we want to
+					// move forward and make the mater process continue running.
+					fmt.Fprintf(os.Stderr, "error in waiting for child to be killed: %+v", err)
+				}
 			}
 
 			childCmd = newChildCmd
