@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 const (
@@ -21,6 +22,7 @@ type Starter struct {
 	workingDirectory              string
 	listeners                     []net.Listener
 	gracefulShutdownSignalToChild syscall.Signal
+	childShutdownWaitTimeout      time.Duration
 	readyPipeR                    *os.File
 }
 
@@ -32,6 +34,7 @@ func New(options ...Option) *Starter {
 	s := &Starter{
 		envListenFDs:                  defaultEnvListenFDs,
 		gracefulShutdownSignalToChild: syscall.SIGTERM,
+		childShutdownWaitTimeout:      time.Minute,
 	}
 	for _, o := range options {
 		o(s)
@@ -52,6 +55,14 @@ func SetEnvName(name string) Option {
 func SetGracefulShutdownSignalToChild(sig syscall.Signal) Option {
 	return func(s *Starter) {
 		s.gracefulShutdownSignalToChild = sig
+	}
+}
+
+// SetChildShutdownWaitTimeout sets the timeout for waiting child to shutdown gracefully.
+// If no SetChildShutdownWaitTimeout is called, the default value is time.Minute.
+func SetChildShutdownWaitTimeout(timeout time.Duration) Option {
+	return func(s *Starter) {
+		s.childShutdownWaitTimeout = timeout
 	}
 }
 
