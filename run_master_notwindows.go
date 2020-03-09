@@ -156,5 +156,9 @@ func (s *Starter) startProcess() (cmd *exec.Cmd, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("error in startProcess after starting worker process; %v", err)
 	}
+
+	// NOTE: This is needed to avoid pipe fd leak.
+	readyW.Close()
+
 	return cmd, nil
 }
