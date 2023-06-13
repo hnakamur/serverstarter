@@ -1,4 +1,4 @@
-// +build !windows
+//go:build !windows
 
 package serverstarter
 
@@ -33,69 +33,93 @@ func (s *Starter) RunMaster(listeners ...net.Listener) error {
 	if err != nil {
 		return fmt.Errorf("error in RunMaster after starting worker; %v", err)
 	}
+	childWaitErrC := make(chan error, 1)
+	go waitChild(childCmd, childWaitErrC)
+	fmt.Printf("started initial worker: pid=%d\n", childCmd.Process.Pid)
+
+	if err := s.waitReady(); err != nil {
+		return fmt.Errorf("error in RunMaster after waiting ready from initial worker; %v", err)
+	}
+	fmt.Println("received ready from initial worker")
 
 	signals := make(chan os.Signal, 1)
 	// NOTE: The signals SIGKILL and SIGSTOP may not be caught by a program.
 	// https://golang.org/pkg/os/signal/#hdr-Types_of_signals
 	signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
 	for {
-		sig := <-signals
-		switch sig {
-		case syscall.SIGHUP:
-			newChildCmd, err := s.startProcess()
-			if err != nil {
-				return fmt.Errorf("error in RunMaster after starting new worker; %v", err)
-			}
-
-			err = s.waitReady()
-			if err != nil {
-				return fmt.Errorf("error in RunMaster after waiting ready; %v", err)
-			}
-
-			childPID := childCmd.Process.Pid
-			err = syscall.Kill(childPID, s.gracefulShutdownSignalToChild)
-			if err != nil {
-				return fmt.Errorf("error in RunMaster after sending signal %q to worker pid=%d after receiving SIGHUP; %v", s.gracefulShutdownSignalToChild, childPID, err)
-			}
-
-			doneC := make(chan error)
-			go func() {
-				doneC <- childCmd.Wait()
-			}()
-
-			timer := time.NewTimer(s.childShutdownWaitTimeout)
-			defer timer.Stop()
-
-			select {
-			case err := <-doneC:
+		select {
+		case sig := <-signals:
+			switch sig {
+			case syscall.SIGHUP:
+				newChildCmd, err := s.startProcess()
 				if err != nil {
-					// NOTE: We do NOT return the error here, since we want to
-					// move forward and make the mater process continue running.
-					fmt.Fprintf(os.Stderr, "error in waiting for child to graceful shutdown: %+v", err)
+					return fmt.Errorf("error in RunMaster after starting new worker; %v", err)
 				}
-			case <-timer.C:
-				err = syscall.Kill(childPID, syscall.SIGKILL)
-				if err != nil {
-					return fmt.Errorf("error in RunMaster after sending signal SIGKILL to worker pid=%d after receiving SIGHUP: %+v", childPID, err)
+				// Recreate error channel to ignore error from old child.
+				newChildWaitErrC := make(chan error, 1)
+				go waitChild(newChildCmd, newChildWaitErrC)
+				fmt.Printf("started new worker: pid=%d\n", newChildCmd.Process.Pid)
+
+				if err := s.waitReady(); err != nil {
+					return fmt.Errorf("error in RunMaster after waiting ready; %v", err)
+				}
+				fmt.Println("received ready from new worker")
+
+				oldChildPID := childCmd.Process.Pid
+				if err := syscall.Kill(oldChildPID, s.gracefulShutdownSignalToChild); err != nil {
+					return fmt.Errorf("error in RunMaster after sending signal %q to worker pid=%d after receiving SIGHUP; %v", s.gracefulShutdownSignalToChild, oldChildPID, err)
 				}
 
-				err = <-doneC
-				if err != nil {
-					// NOTE: We do NOT return the error here, since we want to
-					// move forward and make the mater process continue running.
-					fmt.Fprintf(os.Stderr, "error in waiting for child to be killed: %+v", err)
+				timer := time.NewTimer(s.childShutdownWaitTimeout)
+				select {
+				case err := <-childWaitErrC:
+					timer.Stop()
+					if err != nil {
+						// NOTE: We do NOT return the error here, since we want to
+						// move forward and make the mater process continue running.
+						fmt.Fprintf(os.Stderr, "error in waiting for child to graceful shutdown: %+v\n", err)
+					}
+				case <-timer.C:
+					if err := syscall.Kill(oldChildPID, syscall.SIGKILL); err != nil {
+						return fmt.Errorf("error in RunMaster after sending signal SIGKILL to worker pid=%d after receiving SIGHUP: %+v", oldChildPID, err)
+					}
+
+					if err := <-childWaitErrC; err != nil {
+						// NOTE: We do NOT return the error here, since we want to
+						// move forward and make the mater process continue running.
+						fmt.Fprintf(os.Stderr, "error in waiting for child to be killed: %+v\n", err)
+					}
 				}
+
+				childCmd = newChildCmd
+				childWaitErrC = newChildWaitErrC
+
+			case syscall.SIGINT, syscall.SIGTERM:
+				childPID := childCmd.Process.Pid
+				if err := syscall.Kill(childPID, syscall.SIGTERM); err != nil {
+					return fmt.Errorf("error in RunMaster after sending SIGTERM to worker pid=%d after receiving %v; %v", childPID, sig, err)
+				}
+				if err := <-childWaitErrC; err != nil {
+					return fmt.Errorf("error from child process: %s", err)
+				}
+				fmt.Println("stopped child process, exiting.")
+				return nil
 			}
 
-			childCmd = newChildCmd
-
-		case syscall.SIGINT, syscall.SIGTERM:
-			childPID := childCmd.Process.Pid
-			err = syscall.Kill(childPID, syscall.SIGTERM)
+		case err := <-childWaitErrC:
 			if err != nil {
-				return fmt.Errorf("error in RunMaster after sending SIGTERM to worker pid=%d after receiving %v; %v", childPID, sig, err)
+				fmt.Fprintf(os.Stderr, "child process exited err=%v, restarting child.\n", err)
+			} else {
+				fmt.Println("child process exited without err, restarting child.")
 			}
-			return nil
+			// always restart child process
+			childCmd, err = s.startProcess()
+			if err != nil {
+				return fmt.Errorf("error in RunMaster after restarting worker; %v", err)
+			}
+			childWaitErrC = make(chan error, 1)
+			go waitChild(childCmd, childWaitErrC)
+			fmt.Printf("restarted worker: pid=%d\n", childCmd.Process.Pid)
 		}
 	}
 }
@@ -161,4 +185,8 @@ func (s *Starter) startProcess() (cmd *exec.Cmd, err error) {
 	readyW.Close()
 
 	return cmd, nil
+}
+
+func waitChild(cmd *exec.Cmd, errC chan<- error) {
+	errC <- cmd.Wait()
 }
